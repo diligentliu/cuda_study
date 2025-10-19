@@ -1,0 +1,8 @@
+MODULE*
+bazel-*
+*.log
+*.tmp
+*.out
+*.obj
+*.exe
+*.dll
