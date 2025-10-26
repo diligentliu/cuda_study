@@ -5,6 +5,9 @@
 #include <chrono>
 #include <cuda_runtime.h>
 
+#include "src/util/util.h"
+#include "src/util/perf_util.h"
+
 // CUDA kernel：每个线程计算一个元素
 __global__ void vectorAdd(const float* A, const float* B, float* C, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -21,23 +24,24 @@ int main() {
     std::vector<float> h_C(N);
 
     // 初始化输入数据
+    std::mt19937 gen(std::random_device{}());
+    std::normal_distribution<float> dist(0.0f, 0.2f);
     for (int i = 0; i < N; i++) {
-        h_A[i] = random() % 100 / 10.0f;
-        h_B[i] = random() % 100 / 10.0f;
+        h_A[i] = dist(gen);
+        h_B[i] = dist(gen);
     }
 
     // host time cost test
     std::vector<float> h_C_host(N);
-    auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < N; i++) {
-        h_C_host[i] = h_A[i] + h_B[i];
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> host_duration = end - start;
-    std::cout << "Host vector addition time: " << host_duration.count() << " ms" << std::endl;
-    for (int i = 0; i < 20; i++) {
-        std::cout << "Host C[" << i << "] = " << h_C_host[i] << std::endl;
-    }
+    auto host_test_func = [&]() {
+        for (int i = 0; i < N; i++) {
+            h_C_host[i] = h_A[i] + h_B[i];
+        }
+    };
+    float avg_time_host, throughput_host;
+    util::perf_single_threaded(host_test_func, 10, avg_time_host, throughput_host, 10);
+    std::cout << "Host vector addition time: " << avg_time_host
+              << " ms\nThroughput: " << throughput_host << " GFLOPS" << std::endl;
 
     // 在设备端分配内存
     float *d_A, *d_B, *d_C;
@@ -54,39 +58,24 @@ int main() {
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
     // 启动 kernel
-    start = std::chrono::high_resolution_clock::now();
-    vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
-
-    // 等待 GPU 执行完毕
-    cudaDeviceSynchronize();
-    end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> device_duration = end - start;
-    std::cout << "Device vector addition time: " << device_duration.count() << " ms" << std::endl;
-    // 从 GPU 拷贝结果回主机
+    auto device_test_func = [&]() {
+        vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    };
+    float device_avg_time, device_throughput;
+    util::perf_single_threaded(device_test_func, 10, device_avg_time, device_throughput, 10);
+    std::cout << "Device vector addition time: " << device_avg_time
+              << " ms\nThroughput: " << device_throughput << " GFLOPS" << std::endl;
     cudaMemcpy(h_C.data(), d_C, size, cudaMemcpyDeviceToHost);
 
     // 验证结果
-    for (int i = 0; i < 20; i++) {
-        std::cout << "C[" << i << "] = " << h_C[i] << std::endl;
-    }
+    util::show_matrix(h_C_host, 1, N, 5);
+    util::show_matrix(h_C, 1, N, 5);
 
-    // test difference
-    bool correct = true;
-    for (int i = 0; i < N; i++) {
-        if (fabs(h_C_host[i] - h_C[i]) > 1e-5) {
-            correct = false;
-            std::cout << "Mismatch at index " << i << ": host " << h_C_host[i] << " vs device " << h_C[i] << std::endl;
-            break;
-        }
-    }
-    if (correct) {
-        std::cout << "Results match!" << std::endl;
-    } else {
-        std::cout << "Results do not match!" << std::endl;
-    }
     // show time comparison
-    std::cout << "Host time: " << host_duration.count() << " ms,\nDevice time: " << device_duration.count() << " ms" << std::endl;
-
+    std::cout << "Host time: " << avg_time_host
+              << " ms,\nDevice time: " << device_avg_time << " ms" << std::endl;
     // 释放内存
     cudaFree(d_A);
     cudaFree(d_B);

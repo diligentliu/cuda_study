@@ -1,11 +1,14 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
-#include <chrono>
+#include <iomanip>
+#include <random>
 #include <cuda_runtime.h>
 
-// C[M,N] = A[M,K] * B[K,N]
-__global__ void MatMul(const float* A, const float* B, float* C, int M, int N, int K) {
+#include "src/util/util.h"
+#include "src/util/perf_util.h"
+
+__global__ void MatMul_BASIC(const float* A, const float* B, float* C, int M, int N, int K) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -18,10 +21,91 @@ __global__ void MatMul(const float* A, const float* B, float* C, int M, int N, i
     }
 }
 
+// C[M,N] = A[M,K] * B[K,N]
+template<int BLOCK_SIZE>
+__global__ void MatMul(const float* A, const float* B, float* C, int M, int N, int K) {
+    __shared__ float sA[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ float sB[BLOCK_SIZE][BLOCK_SIZE];
+
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    float value = 0;
+    sA[threadIdx.y][threadIdx.x] = 0.0;
+    sB[threadIdx.y][threadIdx.x] = 0.0;
+
+    for (int k = 0; k < (K + BLOCK_SIZE - 1) / BLOCK_SIZE; k++) {
+        int a_col = k * BLOCK_SIZE + threadIdx.x;
+        int b_row = k * BLOCK_SIZE + threadIdx.y;
+
+        sA[threadIdx.y][threadIdx.x] = (row < M && a_col < K) ?
+            A[row * K + a_col] : 0.0f;
+
+        sB[threadIdx.y][threadIdx.x] = (b_row < K && col < N) ?
+            B[b_row * N + col] : 0.0f;
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int n = 0; n < BLOCK_SIZE; ++n)
+            value += sA[threadIdx.y][n] * sB[n][threadIdx.x];
+
+        __syncthreads();
+    }
+    if (row < M && col < N) {
+        C[row * N + col] = value;
+    }
+}
+
+template<int BLOCK_M, int BLOCK_N, int BLOCK_K>
+__global__ void MatMul_M_N_K(const float* A, const float* B, float* C, int M, int N, int K) {
+    __shared__ float sA[BLOCK_M][BLOCK_K];
+    __shared__ float sB[BLOCK_K][BLOCK_N];
+
+    int row = blockIdx.y * BLOCK_M + threadIdx.y;
+    int col = blockIdx.x * BLOCK_N + threadIdx.x;
+
+    float value = 0;
+
+    const int load_sA_per_thread = (BLOCK_K + BLOCK_N - 1) / BLOCK_N;
+    const int load_sB_per_thread = (BLOCK_K + BLOCK_M - 1) / BLOCK_M;
+
+    for (int k = 0; k < (K + BLOCK_K - 1) / BLOCK_K; k++) {
+        #pragma unroll
+        for (int i = 0; i < load_sA_per_thread; i++) {
+            int k_index = threadIdx.x + i * BLOCK_N;
+            int a_col = k * BLOCK_K + k_index;
+            if (k_index < BLOCK_K) {
+                sA[threadIdx.y][k_index] = (row < M && a_col < K) ?
+                    A[row * K + a_col] : 0.0f;
+            }
+        }
+
+        #pragma unroll
+        for (int i = 0; i < load_sB_per_thread; i++) {
+            int k_index = threadIdx.y + i * BLOCK_M;
+            int b_row = k * BLOCK_K + k_index;
+            if (k_index < BLOCK_K) {
+                sB[k_index][threadIdx.x] = (col < N && b_row < K) ?
+                    B[b_row * N + col] : 0.0f;
+            }
+        }
+        __syncthreads();
+
+        for (int n = 0; n < BLOCK_K; ++n)
+            value += sA[threadIdx.y][n] * sB[n][threadIdx.x];
+
+        __syncthreads();
+    }
+    if (row < M && col < N) {
+        C[row * N + col] = value;
+    }
+}
+
 int main() {
     int M = 50; // 行数
-    int N = 128; // 列数
-    int K = 256; // 共享维度
+    int N = 1024; // 列数
+    int K = 1024; // 共享维度
 
     size_t size_A = M * K * sizeof(float);
     size_t size_B = K * N * sizeof(float);
@@ -33,27 +117,14 @@ int main() {
     std::vector<float> h_C_host(M * N);
 
     // 初始化输入数据
+    std::mt19937 gen(std::random_device{}());
+    std::normal_distribution<float> dist(0.0f, 0.2f);
     for (int i = 0; i < M * K; i++) {
-        h_A[i] = 1.0f;
+        h_A[i] = dist(gen);
     }
     for (int i = 0; i < K * N; i++) {
-        h_B[i] = 1.0f;
+        h_B[i] = dist(gen);
     }
-
-    // host time cost test
-    auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            float value = 0;
-            for (int k = 0; k < K; k++) {
-                value += h_A[i * K + k] * h_B[k * N + j];
-            }
-            h_C_host[i * N + j] = value;
-        }
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> host_duration = end - start;
-    std::cout << "Host matrix multiplication time: " << host_duration.count() << " ms" << std::endl;
 
     // 在设备端分配内存
     float *d_A, *d_B, *d_C;
@@ -65,31 +136,57 @@ int main() {
     cudaMemcpy(d_A, h_A.data(), size_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, h_B.data(), size_B, cudaMemcpyHostToDevice);
 
+    // host time cost test
+    float* d_C_basic;
+    cudaMalloc((void**)&d_C_basic, size_C);
+    constexpr int BLOCK_SIZE = 32;
+    dim3 threadsPerBlock_basic(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 blocksPerGrid_basic((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    auto basic_perf_func = [&]() {
+        MatMul_BASIC<<<blocksPerGrid_basic, threadsPerBlock_basic>>>(d_A, d_B, d_C_basic, M, N, K);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    };
+    float avg_time_basic, throughput_basic;
+    util::perf_single_threaded(basic_perf_func, 10, avg_time_basic, throughput_basic, 10);
+    cudaMemcpy(h_C_host.data(), d_C_basic, size_C, cudaMemcpyDeviceToHost);
+    std::cout << "Basic matrix multiplication time: " << avg_time_basic
+              << " ms, Throughput: " << throughput_basic << " GFLOPS" << std::endl;
+    
     // 设置 CUDA kernel 启动参数
-    dim3 threadsPerBlock(16, 16);
+    constexpr int BLOCK_M = 32;
+    constexpr int BLOCK_N = 32;
+    constexpr int BLOCK_K = 64;
+    dim3 threadsPerBlock(BLOCK_N, BLOCK_M);
     dim3 blocksPerGrid((N + threadsPerBlock.x - 1) / threadsPerBlock.x,
                        (M + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-    start = std::chrono::high_resolution_clock::now();
-    // 启动 kernel
-    MatMul<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, M, N, K);
-    cudaDeviceSynchronize();
-    end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> device_duration = end - start;
-    std::cout << "Device matrix multiplication time: " << device_duration.count() << " ms" << std::endl;
+    // device time cost test
+    auto shared_perf_func = [&]() {
+        // 启动 kernel
+        MatMul_M_N_K<BLOCK_M, BLOCK_N, BLOCK_K><<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, M, N, K);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+    };
+    float avg_time_shared, throughput_shared;
+    util::perf_single_threaded(shared_perf_func, 10, avg_time_shared, throughput_shared, 10);
+
+    std::cout << "Device matrix multiplication time: " << avg_time_shared
+              << " ms, Throughput: " << throughput_shared << " GFLOPS" << std::endl;
     // 将结果拷贝回主机
     cudaMemcpy(h_C.data(), d_C, size_C, cudaMemcpyDeviceToHost);
-
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            if (fabs(h_C_host[i * N + j] - h_C[i * N + j]) > 1e-3) {
-                std::cout << "Mismatch at C[" << i << "," << j << "]: host " << h_C_host[i * N + j]
-                          << " vs device " << h_C[i * N + j] << std::endl;
-            }
-        }
+    if (!util::compare_diff(h_C_host, h_C, M, N, 1e-3f)) {
+        std::cerr << "Result verification failed!" << std::endl;
+        goto cleanup;
     }
     // show time comparison
-    std::cout << "Host time: " << host_duration.count() << " ms,\nDevice time: " << device_duration.count() << " ms" << std::endl;
+    std::cout << "Basic time: " << avg_time_basic
+              << " ms,\nShared time: " << avg_time_shared << " ms" << std::endl;
+    
+cleanup:
+
+    // show results
+    util::show_matrix(h_C, M, N);
     // 释放内存
     cudaFree(d_A);
     cudaFree(d_B);

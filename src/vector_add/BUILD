@@ -5,4 +5,8 @@ package(default_visibility = ["//visibility:public"])
 cuda_binary(
     name = "vector_add",
     srcs = ["vector_add.cu"],
+    deps = [
+        "//src/util:util",
+        "//src/util:perf_util",
+    ],
 )
