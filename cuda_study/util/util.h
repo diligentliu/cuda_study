@@ -5,14 +5,14 @@
 #include <iostream>
 #include <vector>
 #include <iomanip>
+#include <glog/logging.h>
 
 #define CUDA_CHECK(call)                                                   \
     do {                                                                   \
         cudaError_t err = (call);                                          \
         if (err != cudaSuccess) {                                          \
-            fprintf(stderr,                                                \
-                    "CUDA error at %s:%d: %s (%d)\n",                      \
-                    __FILE__, __LINE__, cudaGetErrorString(err), err);     \
+            LOG(ERROR) << "CUDA error: "                                    \
+                       << cudaGetErrorString(err) << " (" << err << ")";   \
             exit(EXIT_FAILURE);                                            \
         }                                                                  \
     } while (0)
@@ -66,9 +66,9 @@ bool compare_diff(const std::vector<T>& a,
     if (std::is_integral<T>::value) {
         for (int i = 0; i < M * N; i++) {
             if (a[i] != b[i]) {
-                std::cout << "Difference found at index " << i
-                          << ": a = " << a[i]
-                          << ", b = " << b[i] << "\n";
+                LOG(ERROR) << "Difference found at index " << i
+                           << ": a = " << a[i]
+                           << ", b = " << b[i];
                 return false;
             }
         }
@@ -80,11 +80,11 @@ bool compare_diff(const std::vector<T>& a,
             float rel_diff = diff / (std::fabs(b[i]) + 1e-8f); // 防止除以零
 
             if (rel_diff > tol) {
-                std::cout << "Difference found at index " << i
-                          << ": a = " << a[i]
-                          << ", b = " << b[i]
-                          << ", abs diff = " << diff
-                          << ", rel diff = " << rel_diff << "\n";
+                LOG(ERROR) << "Difference found at index " << i
+                           << ": a = " << a[i]
+                           << ", b = " << b[i]
+                           << ", abs diff = " << diff
+                           << ", rel diff = " << rel_diff;
                 return false;
             }
         }

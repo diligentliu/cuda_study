@@ -4,9 +4,10 @@
 #include <iomanip>
 #include <random>
 #include <cuda_runtime.h>
+#include <glog/logging.h>
 
-#include "src/util/util.h"
-#include "src/util/perf_util.h"
+#include "cuda_study/util/util.h"
+#include "cuda_study/util/perf_util.h"
 
 __global__ void MatMul_BASIC(const float* A, const float* B, float* C, int M, int N, int K) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -92,6 +93,7 @@ __global__ void MatMul_M_N_K(const float* A, const float* B, float* C, int M, in
         }
         __syncthreads();
 
+        #pragma unroll
         for (int n = 0; n < BLOCK_K; ++n)
             value += sA[threadIdx.y][n] * sB[n][threadIdx.x];
 
@@ -103,9 +105,9 @@ __global__ void MatMul_M_N_K(const float* A, const float* B, float* C, int M, in
 }
 
 int main() {
-    int M = 50; // 行数
-    int N = 1024; // 列数
-    int K = 1024; // 共享维度
+    int M = 50;
+    int N = 1024;
+    int K = 1024;
 
     size_t size_A = M * K * sizeof(float);
     size_t size_B = K * N * sizeof(float);
@@ -116,7 +118,6 @@ int main() {
     std::vector<float> h_C(M * N);
     std::vector<float> h_C_host(M * N);
 
-    // 初始化输入数据
     std::mt19937 gen(std::random_device{}());
     std::normal_distribution<float> dist(0.0f, 0.2f);
     for (int i = 0; i < M * K; i++) {
@@ -126,17 +127,14 @@ int main() {
         h_B[i] = dist(gen);
     }
 
-    // 在设备端分配内存
     float *d_A, *d_B, *d_C;
     cudaMalloc((void**)&d_A, size_A);
     cudaMalloc((void**)&d_B, size_B);
     cudaMalloc((void**)&d_C, size_C);
 
-    // 将数据拷贝到 GPU
     cudaMemcpy(d_A, h_A.data(), size_A, cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, h_B.data(), size_B, cudaMemcpyHostToDevice);
 
-    // host time cost test
     float* d_C_basic;
     cudaMalloc((void**)&d_C_basic, size_C);
     constexpr int BLOCK_SIZE = 32;
@@ -150,10 +148,9 @@ int main() {
     float avg_time_basic, throughput_basic;
     util::perf_single_threaded(basic_perf_func, 10, avg_time_basic, throughput_basic, 10);
     cudaMemcpy(h_C_host.data(), d_C_basic, size_C, cudaMemcpyDeviceToHost);
-    std::cout << "Basic matrix multiplication time: " << avg_time_basic
-              << " ms, Throughput: " << throughput_basic << " GFLOPS" << std::endl;
-    
-    // 设置 CUDA kernel 启动参数
+    LOG(INFO) << "Basic matrix multiplication time: " << avg_time_basic << " ms";
+    LOG(INFO) << "Throughput: " << throughput_basic << " GFLOPS";
+
     constexpr int BLOCK_M = 32;
     constexpr int BLOCK_N = 32;
     constexpr int BLOCK_K = 64;
@@ -161,9 +158,7 @@ int main() {
     dim3 blocksPerGrid((N + threadsPerBlock.x - 1) / threadsPerBlock.x,
                        (M + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
-    // device time cost test
     auto shared_perf_func = [&]() {
-        // 启动 kernel
         MatMul_M_N_K<BLOCK_M, BLOCK_N, BLOCK_K><<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, M, N, K);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -171,17 +166,18 @@ int main() {
     float avg_time_shared, throughput_shared;
     util::perf_single_threaded(shared_perf_func, 10, avg_time_shared, throughput_shared, 10);
 
-    std::cout << "Device matrix multiplication time: " << avg_time_shared
-              << " ms, Throughput: " << throughput_shared << " GFLOPS" << std::endl;
-    // 将结果拷贝回主机
+    LOG(INFO) << "Shared matrix multiplication time: " << avg_time_shared << " ms";
+    LOG(INFO) << "Throughput: " << throughput_shared << " GFLOPS";
+
     cudaMemcpy(h_C.data(), d_C, size_C, cudaMemcpyDeviceToHost);
     if (!util::compare_diff(h_C_host, h_C, M, N, 1e-3f)) {
-        std::cerr << "Result verification failed!" << std::endl;
+        LOG(ERROR) << "Result verification failed!";
         goto cleanup;
     }
-    // show time comparison
-    std::cout << "Basic time: " << avg_time_basic
-              << " ms,\nShared time: " << avg_time_shared << " ms" << std::endl;
+    // std::cout << "Basic time: " << avg_time_basic
+    //           << " ms,\nShared time: " << avg_time_shared << " ms" << std::endl;
+    LOG(INFO) << "Basic time: " << avg_time_basic << " ms";
+    LOG(INFO) << "Shared time: " << avg_time_shared << " ms";
     
 cleanup:
 
@@ -190,6 +186,7 @@ cleanup:
     // 释放内存
     cudaFree(d_A);
     cudaFree(d_B);
+    cudaFree(d_C_basic);
     cudaFree(d_C);
     return 0;
 }

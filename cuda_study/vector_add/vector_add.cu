@@ -4,9 +4,10 @@
 #include <random>
 #include <chrono>
 #include <cuda_runtime.h>
+#include <glog/logging.h>
 
-#include "src/util/util.h"
-#include "src/util/perf_util.h"
+#include "cuda_study/util/util.h"
+#include "cuda_study/util/perf_util.h"
 
 // CUDA kernel：每个线程计算一个元素
 __global__ void vectorAdd(const float* A, const float* B, float* C, int N) {
@@ -40,8 +41,8 @@ int main() {
     };
     float avg_time_host, throughput_host;
     util::perf_single_threaded(host_test_func, 10, avg_time_host, throughput_host, 10);
-    std::cout << "Host vector addition time: " << avg_time_host
-              << " ms\nThroughput: " << throughput_host << " GFLOPS" << std::endl;
+    LOG(INFO) << "Host vector addition time: " << avg_time_host << " ms";
+    LOG(INFO) << "Throughput: " << throughput_host << " GFLOPS" << std::endl;
 
     // 在设备端分配内存
     float *d_A, *d_B, *d_C;
@@ -65,8 +66,8 @@ int main() {
     };
     float device_avg_time, device_throughput;
     util::perf_single_threaded(device_test_func, 10, device_avg_time, device_throughput, 10);
-    std::cout << "Device vector addition time: " << device_avg_time
-              << " ms\nThroughput: " << device_throughput << " GFLOPS" << std::endl;
+    LOG(INFO) << "Device vector addition time: " << device_avg_time << " ms";
+    LOG(INFO) << "Throughput: " << device_throughput << " GFLOPS";
     cudaMemcpy(h_C.data(), d_C, size, cudaMemcpyDeviceToHost);
 
     // 验证结果
@@ -74,13 +75,13 @@ int main() {
     util::show_matrix(h_C, 1, N, 5);
 
     // show time comparison
-    std::cout << "Host time: " << avg_time_host
-              << " ms,\nDevice time: " << device_avg_time << " ms" << std::endl;
+    LOG(INFO) << "Host time: " << avg_time_host << " ms";
+    LOG(INFO) << "Device time: " << device_avg_time << " ms";
     // 释放内存
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);
 
-    std::cout << "Vector addition completed successfully!" << std::endl;
+    LOG(INFO) << "Vector addition completed successfully!";
     return 0;
 }
