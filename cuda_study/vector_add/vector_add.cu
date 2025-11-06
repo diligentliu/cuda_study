@@ -1,8 +1,6 @@
-#include <cmath>
 #include <iostream>
 #include <vector>
 #include <random>
-#include <chrono>
 #include <cuda_runtime.h>
 #include <glog/logging.h>
 

@@ -1,7 +1,5 @@
-#include <cmath>
 #include <iostream>
 #include <vector>
-#include <iomanip>
 #include <random>
 #include <cuda_runtime.h>
 #include <glog/logging.h>
@@ -74,7 +72,7 @@ __global__ void MatMul_M_N_K(const float* A, const float* B, float* C, int M, in
     for (int k = 0; k < (K + BLOCK_K - 1) / BLOCK_K; k++) {
         #pragma unroll
         for (int i = 0; i < load_sA_per_thread; i++) {
-            int k_index = threadIdx.x + i * BLOCK_N;
+            int k_index = threadIdx.x * load_sA_per_thread + i;
             int a_col = k * BLOCK_K + k_index;
             if (k_index < BLOCK_K) {
                 sA[threadIdx.y][k_index] = (row < M && a_col < K) ?
@@ -84,7 +82,7 @@ __global__ void MatMul_M_N_K(const float* A, const float* B, float* C, int M, in
 
         #pragma unroll
         for (int i = 0; i < load_sB_per_thread; i++) {
-            int k_index = threadIdx.y + i * BLOCK_M;
+            int k_index = threadIdx.y * load_sB_per_thread + i;
             int b_row = k * BLOCK_K + k_index;
             if (k_index < BLOCK_K) {
                 sB[k_index][threadIdx.x] = (col < N && b_row < K) ?
@@ -105,7 +103,7 @@ __global__ void MatMul_M_N_K(const float* A, const float* B, float* C, int M, in
 }
 
 int main() {
-    int M = 50;
+    int M = 1024;
     int N = 1024;
     int K = 1024;
 
@@ -174,16 +172,12 @@ int main() {
         LOG(ERROR) << "Result verification failed!";
         goto cleanup;
     }
-    // std::cout << "Basic time: " << avg_time_basic
-    //           << " ms,\nShared time: " << avg_time_shared << " ms" << std::endl;
     LOG(INFO) << "Basic time: " << avg_time_basic << " ms";
     LOG(INFO) << "Shared time: " << avg_time_shared << " ms";
     
 cleanup:
 
-    // show results
     util::show_matrix(h_C, M, N);
-    // 释放内存
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C_basic);

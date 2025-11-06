@@ -1,8 +1,6 @@
-#include <cmath>
 #include <iostream>
 #include <vector>
 #include <random>
-#include <iomanip>
 #include <cuda_runtime.h>
 #include <glog/logging.h>
 
@@ -24,7 +22,7 @@ __global__ void MatMul(const float* A, const float* B, float* C, int M, int N, i
 }
 
 int main() {
-    int M = 50;
+    int M = 1024;
     int N = 1024;
     int K = 1024;
 

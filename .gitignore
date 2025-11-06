@@ -6,3 +6,7 @@ bazel-*
 *.obj
 *.exe
 *.dll
+
+compile_commands.json
+external
+.cache

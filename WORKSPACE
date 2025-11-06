@@ -16,18 +16,18 @@ register_detected_cuda_toolchains()
 
 git_repository(
     name = "com_github_gflags_gflags",
-    remote = "git@coding.jd.com.liusongkuo1:liusongkuo1/gflags.git",
+    remote = "git@coding.jd.com:liusongkuo1/gflags.git",
     tag = "v2.2.2"
 )
 
 git_repository(
     name = "com_github_google_glog",
-    remote = "git@coding.jd.com.liusongkuo1:liusongkuo1/glog.git",
+    remote = "git@coding.jd.com:liusongkuo1/glog.git",
     tag = "v0.7.1"
 )
 
 git_repository(
     name = "com_google_googletest",
-    remote = "git@coding.jd.com.liusongkuo1:liusongkuo1/googletest.git",
+    remote = "git@coding.jd.com:liusongkuo1/googletest.git",
     tag = "v1.17.0"
 )

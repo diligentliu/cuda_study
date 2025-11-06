@@ -23,3 +23,14 @@ cuda_binary(
         "@com_github_google_glog//:glog",
     ],
 )
+
+cuda_binary(
+    name = "matmul_tiled",
+    srcs = ["matmul_tiled.cu"],
+    deps = [
+        "//cuda_study/util:util",
+        "//cuda_study/util:perf_util",
+        "@com_github_gflags_gflags//:gflags",
+        "@com_github_google_glog//:glog",
+    ],
+)
